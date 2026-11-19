@@ -1,10 +1,10 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import {
   AssistantActionSummary,
   AssistantEnvironmentalContext,
 } from '@/types/assistant';
 
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_MODEL = 'gemini-3.8-flash';
 
 export async function callGeminiAssistant(params: {
   message: string;
@@ -22,15 +22,11 @@ export async function callGeminiAssistant(params: {
 
   const modelName = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: modelName,
-      generationConfig: {
-        temperature: 0.3, // Low temperature for high factual grounding
-        maxOutputTokens: 600,
-      },
-    });
+    const ai = new GoogleGenAI({ apiKey });
 
     const groundingFacts = [
       `Location: ${params.environmentalContext.city}, ${params.environmentalContext.country}`,
@@ -60,17 +56,39 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
 6. Provide free and low-cost practical solutions first.
 7. Keep responses concise (under 250 words), empathetic, and formatted in clean markdown bullet points.`;
 
-    const chat = model.startChat({
-      history: (params.history || []).slice(-4).map((h) => ({
-        role: h.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: h.content }],
-      })),
+    const contents: Array<{
+      role: 'user' | 'model';
+      parts: Array<{ text: string }>;
+    }> = [];
+
+    if (params.history && params.history.length > 0) {
+      for (const h of params.history.slice(-4)) {
+        contents.push({
+          role: h.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: h.content }],
+        });
+      }
+    }
+
+    contents.push({
+      role: 'user',
+      parts: [{ text: params.message }],
     });
 
-    const promptWithContext = `${systemInstruction}\n\nUser Question: ${params.message}`;
-    const result = await chat.sendMessage(promptWithContext);
-    const replyText = result.response.text();
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.3,
+        maxOutputTokens: 600,
+        abortSignal: controller.signal,
+      },
+    });
 
+    clearTimeout(timeoutId);
+
+    const replyText = response.text;
     if (!replyText || replyText.trim() === '') {
       return null;
     }
@@ -80,6 +98,7 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       groundingFacts,
     };
   } catch (error) {
+    clearTimeout(timeoutId);
     console.warn('Gemini API call encountered an error, falling back to local engine:', error);
     return null;
   }

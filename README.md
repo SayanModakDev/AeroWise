@@ -100,7 +100,7 @@ Key pillars:
 - **Frontend:** Next.js 15 App Router, React 19, TypeScript (strict mode), Tailwind CSS v4, Lucide React icons.
 - **Backend:** Next.js Server-Side API Route (`/api/assistant`) with server-only environment variables.
 - **Environmental Data:** Open-Meteo Air Quality & Geocoding APIs (utilizing Copernicus Atmosphere Monitoring Service - CAMS Global numerical forecasts).
-- **AI Integration:** Google Gemini API (`@google/generative-ai`) with deterministic local decision-engine fallback.
+- **AI Integration:** Google Gemini API (official `@google/genai` SDK, defaulting to `gemini-3.8-flash`) with deterministic local decision-engine fallback.
 - **Testing:** Vitest with unit tests for data parsing, decision rules, WHO benchmarks, CPCB compliance, and AI fallback.
 
 ---
@@ -120,7 +120,8 @@ The **Air-to-Action Decision Engine** (`src/lib/decision-engine/`) is an isolate
 
 ## 9. GenAI Integration & Grounding
 - **Endpoint:** `POST /api/assistant`
-- **Model:** Configurable via `GEMINI_MODEL` (defaults to `gemini-2.5-flash`).
+- **SDK:** Official `@google/genai` SDK (`GoogleGenAI`)
+- **Model:** Configurable via `GEMINI_MODEL` (defaults to `gemini-3.8-flash`).
 - **Grounding Protocol:**
   1. The API route receives the user message, aggregated environmental facts (city, modelled $\text{PM}_{2.5}$, $\text{PM}_{10}$, trend), and the top candidate recommendations already evaluated by the decision engine.
   2. The system prompt strictly restricts the model to supplied facts and candidate actions. The model is forbidden from inventing live AQI readings, monitoring stations, or medical claims.
@@ -162,7 +163,7 @@ The **Air-to-Action Decision Engine** (`src/lib/decision-engine/`) is an isolate
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/Sayan901/AeroWise.git
+   git clone https://github.com/SayanModakDev/AeroWise.git
    cd AeroWise
    ```
 2. Install dependencies:
@@ -176,7 +177,7 @@ The **Air-to-Action Decision Engine** (`src/lib/decision-engine/`) is an isolate
    Add your Google Gemini API key to `.env.local`:
    ```env
    GEMINI_API_KEY=your_google_ai_studio_api_key_here
-   GEMINI_MODEL=gemini-2.5-flash
+   GEMINI_MODEL=gemini-3.8-flash
    ```
 4. Start the development server:
    ```bash
@@ -193,9 +194,9 @@ See `.env.example`:
 # Get your API key from Google AI Studio: https://aistudio.google.com/
 GEMINI_API_KEY=
 
-# Google Gemini Model (e.g., gemini-2.5-flash or gemini-1.5-flash)
-# Defaults to gemini-2.5-flash if unset
-GEMINI_MODEL=gemini-2.5-flash
+# Google Gemini Model
+# Defaults to gemini-3.8-flash if unset
+GEMINI_MODEL=gemini-3.8-flash
 ```
 
 ---
@@ -223,7 +224,7 @@ npm run build
 - **Client-Side Persistence:** Household composition, fuel choices, and health sensitivity flags are stored **strictly in browser `localStorage`**.
 - **No Medical Data Leakage:** When querying the GenAI Assistant, health vulnerability flags and exact coordinates are stripped. Only general environmental context and candidate action titles are passed.
 - **No User Accounts or Tracking:** No paid database, no user tracking, no session cookies, and no advertising analytics.
-- **Input Sanitization:** All incoming requests to `/api/assistant` are validated using strict Zod schemas with message length caps ($< 500$ characters).
+- **Input Sanitization:** All incoming requests to `/api/assistant` are validated using strict Zod schemas with message length caps ($\le 600$ characters).
 
 ---
 

@@ -156,6 +156,34 @@ describe('Environmental Data Service & Normalization', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('searchCities parses valid Open-Meteo geocoding response into GeoLocation list', async () => {
+    const fakeGeocoding = {
+      results: [
+        {
+          id: 1273294,
+          name: 'Delhi',
+          latitude: 28.65195,
+          longitude: 77.23149,
+          country: 'India',
+          country_code: 'IN',
+          admin1: 'Delhi',
+          timezone: 'Asia/Kolkata',
+        },
+      ],
+    };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => fakeGeocoding,
+    }));
+
+    const results = await searchCities('Delhi');
+    expect(results.length).toBe(1);
+    expect(results[0].name).toBe('Delhi');
+    expect(results[0].country).toBe('India');
+    expect(results[0].countryCode).toBe('IN');
+  });
+
   it('fetchAirQuality caches responses and avoids repeated network requests within TTL', async () => {
     const fakeApiResponse = {
       current: { time: '2026-11-18T10:00:00Z', pm2_5: 55, pm10: 95 },
@@ -186,5 +214,23 @@ describe('Environmental Data Service & Normalization', () => {
     const secondResult = await fetchAirQuality(loc);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(secondResult.current.pm2_5).toBe(55);
+  });
+
+  it('fetchAirQuality handles API failure status cleanly by throwing informative error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+    }));
+
+    const loc: GeoLocation = {
+      id: 8888,
+      name: 'Error Test City',
+      country: 'TestLand',
+      countryCode: 'TL',
+      latitude: 10.5,
+      longitude: 20.5,
+    };
+
+    await expect(fetchAirQuality(loc, true)).rejects.toThrow('Air Quality API responded with status 503');
   });
 });
