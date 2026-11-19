@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { callGeminiAssistant, DEFAULT_TIMEOUT_MS } from '@/lib/assistant/gemini';
+import {
+  callGeminiAssistant,
+  DEFAULT_TIMEOUT_MS,
+  DEFAULT_MAX_OUTPUT_TOKENS,
+} from '@/lib/assistant/gemini';
 import { AssistantEnvironmentalContext } from '@/types/assistant';
 
 // Mock @google/genai module
@@ -44,13 +48,15 @@ const mockTopActions = [
   },
 ];
 
-describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () => {
+describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Response Completeness', () => {
   const originalEnv = { ...process.env };
   let warnSpy: ReturnType<typeof vi.spyOn>;
+  let infoSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -58,8 +64,9 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () =
     vi.useRealTimers();
   });
 
-  it('verifies default timeout constant is set to 20000ms', () => {
+  it('verifies default timeout constant is set to 20000ms and maxOutputTokens is 800', () => {
     expect(DEFAULT_TIMEOUT_MS).toBe(20000);
+    expect(DEFAULT_MAX_OUTPUT_TOKENS).toBe(800);
   });
 
   it('returns null and does not instantiate SDK if GEMINI_API_KEY is not set', async () => {
@@ -82,6 +89,8 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () =
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
     mockGen.mockResolvedValueOnce({
       text: 'Response from default gemini-3.5-flash-lite model.',
+      candidates: [{ finishReason: 'STOP' }],
+      usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 30, totalTokenCount: 150 },
     });
 
     const result = await callGeminiAssistant({
@@ -98,9 +107,14 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () =
     const callArgs = mockGen.mock.calls[0][0];
     expect(callArgs.model).toBe('gemini-3.5-flash-lite');
     expect(callArgs.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
-    expect(callArgs.config.maxOutputTokens).toBe(400);
+    expect(callArgs.config.maxOutputTokens).toBe(800);
     expect(callArgs.config.abortSignal).toBeDefined();
     expect(callArgs.config.systemInstruction).toContain('AeroWise Assistant');
+
+    // Verify safe diagnostic logging was called
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Diagnostic - Model: gemini-3.5-flash-lite, FinishReason: STOP')
+    );
   });
 
   it('honors GEMINI_MODEL environment-variable override', async () => {
@@ -110,6 +124,7 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () =
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
     mockGen.mockResolvedValueOnce({
       text: 'Response from custom configured model.',
+      candidates: [{ finishReason: 'STOP' }],
     });
 
     const result = await callGeminiAssistant({
@@ -124,32 +139,155 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () =
     expect(callArgs.model).toBe('gemini-2.5-pro');
   });
 
-  it('successfully generates response from gemini-3.5-flash-lite with LOW thinking level', async () => {
+  it('complete Gemini response ending with STOP returns full content and grounding facts', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
-    process.env.GEMINI_MODEL = 'gemini-3.5-flash-lite';
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
     mockGen.mockResolvedValueOnce({
-      text: 'Based on current conditions in New Delhi, postpone outdoor workouts until afternoon.',
+      text: 'With current modelled PM2.5 at 180 µg/m³, morning outdoor exercise poses high respiratory exposure.\n\n1. Move workout indoors today.\n2. Keep windows sealed during inversion peaks.\n3. Exercise after 13:00 if outdoors.\n\nThese steps reduce direct alveolar particulate deposition.',
+      candidates: [{ finishReason: 'STOP' }],
+      usageMetadata: { promptTokenCount: 160, candidatesTokenCount: 65, totalTokenCount: 225 },
     });
 
     const result = await callGeminiAssistant({
-      message: 'Can I exercise outdoors today?',
+      message: 'What are three recommendations for exercise?',
       environmentalContext: mockEnv,
       topActions: mockTopActions,
     });
 
     expect(result).not.toBeNull();
-    expect(result?.reply).toContain('New Delhi');
+    expect(result?.reply).toContain('1. Move workout indoors today.');
+    expect(result?.reply).toContain('2. Keep windows sealed during inversion peaks.');
+    expect(result?.reply).toContain('3. Exercise after 13:00 if outdoors.');
     expect(result?.groundingFacts.length).toBeGreaterThan(0);
+  });
 
-    expect(mockGen).toHaveBeenCalledTimes(1);
-    const callArgs = mockGen.mock.calls[0][0];
-    expect(callArgs.model).toBe('gemini-3.5-flash-lite');
-    expect(callArgs.config.temperature).toBeUndefined();
-    expect(callArgs.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
-    expect(callArgs.config.maxOutputTokens).toBe(400);
-    expect(callArgs.config.abortSignal).toBeDefined();
+  it('treats response ending with MAX_TOKENS as incomplete and returns null for local fallback', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    // Simulate generation truncated mid-sentence by token budget
+    mockGen.mockResolvedValueOnce({
+      text: "You don't need an expensive air purifier to protect your family indoors. With",
+      candidates: [{ finishReason: 'MAX_TOKENS' }],
+      usageMetadata: { promptTokenCount: 180, candidatesTokenCount: 400, totalTokenCount: 580 },
+    });
+
+    const result = await callGeminiAssistant({
+      message: 'How to clean air without purifier?',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Incomplete response truncated by MAX_TOKENS ceiling')
+    );
+  });
+
+  it('treats missing candidates as failure and returns null for local fallback', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    mockGen.mockResolvedValueOnce({
+      text: '',
+      candidates: [],
+    });
+
+    const result = await callGeminiAssistant({
+      message: 'Hello?',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('No candidate returned from model')
+    );
+  });
+
+  it('treats safety-blocked response as failure and returns null for local fallback', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    mockGen.mockResolvedValueOnce({
+      text: '',
+      candidates: [{ finishReason: 'SAFETY', finishMessage: 'Blocked due to health safety filters' }],
+    });
+
+    const result = await callGeminiAssistant({
+      message: 'Prescribe medicine for cough',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Generation blocked by safety policy (FinishReason: SAFETY')
+    );
+  });
+
+  it('treats recitation or policy block as failure and returns null', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    mockGen.mockResolvedValueOnce({
+      text: 'Some copyright content...',
+      candidates: [{ finishReason: 'RECITATION' }],
+    });
+
+    const result = await callGeminiAssistant({
+      message: 'Recite text',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Generation blocked by safety policy (FinishReason: RECITATION')
+    );
+  });
+
+  it('treats other non-standard finish reasons as failure and returns null', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    mockGen.mockResolvedValueOnce({
+      text: 'Partial text before error',
+      candidates: [{ finishReason: 'OTHER' }],
+    });
+
+    const result = await callGeminiAssistant({
+      message: 'Trigger other finish reason',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Non-standard finish reason received (FinishReason: OTHER')
+    );
+  });
+
+  it('returns null if model returns empty or whitespace-only response', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    mockGen.mockResolvedValueOnce({
+      text: '   ',
+      candidates: [{ finishReason: 'STOP' }],
+    });
+
+    const result = await callGeminiAssistant({
+      message: 'Hello?',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Empty or blank response')
+    );
   });
 
   it('triggers fallback and returns null when request exceeds 20 seconds timeout', async () => {
@@ -191,6 +329,7 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () =
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
     mockGen.mockResolvedValueOnce({
       text: 'Quick successful response',
+      candidates: [{ finishReason: 'STOP' }],
     });
 
     await callGeminiAssistant({
@@ -333,26 +472,6 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () =
     expect(result).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Network connectivity error')
-    );
-  });
-
-  it('returns null if model returns empty or whitespace-only response', async () => {
-    process.env.GEMINI_API_KEY = 'test-key-valid';
-
-    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
-    mockGen.mockResolvedValueOnce({
-      text: '   ',
-    });
-
-    const result = await callGeminiAssistant({
-      message: 'Hello?',
-      environmentalContext: mockEnv,
-      topActions: mockTopActions,
-    });
-
-    expect(result).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Empty or blank response')
     );
   });
 

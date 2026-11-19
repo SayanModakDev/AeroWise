@@ -6,6 +6,7 @@ import {
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_TIMEOUT_MS = 20000;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 800;
 
 export async function callGeminiAssistant(params: {
   message: string;
@@ -54,21 +55,29 @@ export async function callGeminiAssistant(params: {
     const systemInstruction = `You are AeroWise Assistant, an expert environmental-health and air quality action planner.
 Your goal is to help families make practical, low-emission, exposure-reducing decisions during severe urban air pollution.
 
+RESPONSE STRUCTURE & STYLE:
+- Direct and actionable: Begin with a direct one-sentence explanation addressing the user's specific query.
+- Three recommendations: When actionable steps or recommendations are requested, provide exactly three numbered practical recommendations (1., 2., 3.).
+- Impact rationale: Explain briefly why the recommendations matter, distinguishing personal exposure protection from community emissions reduction.
+- Safety & limitation: Include a short relevant safety or limitation note when necessary.
+- Completeness: Always write complete grammatical sentences with proper sentence endings (periods, question marks). NEVER stop mid-sentence.
+- Target length: Aim for approximately 80–140 words for ordinary environmental advice, adjusting to the question.
+- Clean Markdown: Format cleanly using standard Markdown (**bold**, numbered lists, bullet points).
+
 STRICT GROUNDING & SAFETY RULES:
 1. ONLY refer to the supplied environmental facts and verified action candidates:
-   - City: ${params.environmentalContext.city}
+   - Location: ${params.environmentalContext.city}, ${params.environmentalContext.country}
    - Modelled PM2.5: ${params.environmentalContext.currentPm25 ?? 'N/A'} µg/m³ (from CAMS Global forecast, NOT an official regulatory monitoring station)
    - Modelled PM10: ${params.environmentalContext.currentPm10 ?? 'N/A'} µg/m³
    - Trend: ${params.environmentalContext.trendDirection}
-   - Verified candidate actions:
+   - Verified candidate actions from AeroWise Engine:
 ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${a.whatToDo}`).join('\n')}
 
 2. NEVER invent live AQI numbers, monitoring stations, medical statistics, or health guarantees.
-3. NEVER diagnose medical conditions or advise changes to prescribed medications. If a user mentions severe or worsening symptoms (e.g. chest pain, severe asthma attack), explicitly instruct them to seek urgent in-person medical care.
+3. NEVER diagnose medical conditions or alter prescribed treatments. If a user mentions severe or worsening symptoms (e.g. chest pain, acute asthma attack), explicitly instruct them to seek urgent in-person medical care.
 4. Distinguish modelled numerical forecasts from official regulatory government stations (like India's CPCB).
 5. Explain exposure reduction vs emissions reduction clearly.
-6. Provide free and low-cost practical solutions first.
-7. Keep responses concise (under 250 words), empathetic, and formatted in clean markdown bullet points.`;
+6. Provide free and low-cost practical solutions first.`;
 
     const contents: Array<{
       role: 'user' | 'model';
@@ -97,17 +106,72 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
         thinkingConfig: {
           thinkingLevel: ThinkingLevel.LOW,
         },
-        maxOutputTokens: 400,
+        maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
         abortSignal: controller.signal,
       },
     });
 
     const elapsedMs = Date.now() - startTime;
-    const replyText = response.text;
 
+    // Inspect candidates, finishReason, and usage metrics
+    const candidates = response.candidates;
+    const primaryCandidate = candidates && candidates.length > 0 ? candidates[0] : undefined;
+    const finishReason = primaryCandidate?.finishReason;
+    const finishMessage = (primaryCandidate as { finishMessage?: string })?.finishMessage;
+    const usage = response.usageMetadata;
+    const promptTokens = usage?.promptTokenCount ?? 0;
+    const candidateTokens = usage?.candidatesTokenCount ?? 0;
+    const totalTokens = usage?.totalTokenCount ?? 0;
+    const replyText = response.text;
+    const charLength = replyText ? replyText.length : 0;
+
+    // Safe diagnostic logging (no API keys, prompts, household PII, or raw personal data)
+    console.info(
+      `[Gemini Assistant] Diagnostic - Model: ${modelName}, FinishReason: ${finishReason || 'UNKNOWN'}, PromptTokens: ${promptTokens}, CandidateTokens: ${candidateTokens}, TotalTokens: ${totalTokens}, CharLength: ${charLength}, Duration: ${elapsedMs}ms`
+    );
+
+    // Validate candidate presence
+    if (!primaryCandidate) {
+      console.warn(
+        `[Gemini Assistant] No candidate returned from model '${modelName}' (FinishReason: NONE, Duration: ${elapsedMs}ms). Falling back to local decision engine.`
+      );
+      return null;
+    }
+
+    // Treat responses ending with MAX_TOKENS as incomplete
+    if (finishReason === 'MAX_TOKENS') {
+      console.warn(
+        `[Gemini Assistant] Incomplete response truncated by MAX_TOKENS ceiling (CandidateTokens: ${candidateTokens}, CharLength: ${charLength}, Duration: ${elapsedMs}ms). Discarding incomplete output and falling back to local decision engine.`
+      );
+      return null;
+    }
+
+    // Check for safety or policy blocking
+    if (
+      finishReason === 'SAFETY' ||
+      finishReason === 'RECITATION' ||
+      finishReason === 'BLOCKLIST' ||
+      finishReason === 'PROHIBITED_CONTENT' ||
+      finishReason === 'SPII'
+    ) {
+      console.warn(
+        `[Gemini Assistant] Generation blocked by safety policy (FinishReason: ${finishReason}, Message: ${finishMessage || 'none'}, Duration: ${elapsedMs}ms). Falling back to local decision engine.`
+      );
+      return null;
+    }
+
+    // Check for other abnormal finish reasons
+    if (finishReason !== 'STOP' && finishReason !== undefined) {
+      console.warn(
+        `[Gemini Assistant] Non-standard finish reason received (FinishReason: ${finishReason}, Message: ${finishMessage || 'none'}, Duration: ${elapsedMs}ms). Discarding potentially incomplete output and falling back to local decision engine.`
+      );
+      return null;
+    }
+
+    // Check for empty or blank text
     if (!replyText || replyText.trim() === '') {
       console.warn(
-        `[Gemini Assistant] Empty or blank response received from model '${modelName}' after ${elapsedMs}ms. Falling back to local decision engine.`
+        `[Gemini Assistant] Empty or blank response received from model '${modelName}' (FinishReason: ${finishReason || 'STOP'}, Duration: ${elapsedMs}ms). Falling back to local decision engine.`
       );
       return null;
     }

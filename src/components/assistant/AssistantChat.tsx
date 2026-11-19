@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import { AssistantMarkdown } from './AssistantMarkdown';
 import {
   Sparkles,
   Send,
@@ -216,7 +217,7 @@ Ask me anything about daily routines, workout timing, low-cost indoor air protec
             return (
               <div
                 key={msg.id}
-                className={`flex gap-3 max-w-3xl ${
+                className={`flex items-start gap-2.5 sm:gap-3 max-w-[92%] sm:max-w-2xl lg:max-w-3xl min-w-0 ${
                   isUser ? 'ml-auto flex-row-reverse' : ''
                 }`}
               >
@@ -241,7 +242,7 @@ Ask me anything about daily routines, workout timing, low-cost indoor air protec
 
                 {/* Message Content */}
                 <div
-                  className={`space-y-2 text-xs sm:text-sm rounded-2xl p-4 shadow-2xs leading-relaxed ${
+                  className={`space-y-2 text-xs sm:text-sm rounded-2xl p-4 shadow-2xs leading-relaxed min-w-0 max-w-full break-words ${
                     isUser
                       ? 'bg-teal-700 text-white rounded-tr-none'
                       : 'bg-white text-slate-800 border border-slate-200/80 rounded-tl-none'
@@ -269,10 +270,14 @@ Ask me anything about daily routines, workout timing, low-cost indoor air protec
                     </div>
                   )}
 
-                  {/* Message body rendered simply */}
-                  <div className="whitespace-pre-wrap space-y-2">
-                    {msg.content}
-                  </div>
+                  {/* Message body with safe Markdown formatting for Assistant, plain text for User */}
+                  {isUser ? (
+                    <div className="whitespace-pre-wrap break-words leading-relaxed">
+                      {msg.content}
+                    </div>
+                  ) : (
+                    <AssistantMarkdown content={msg.content} />
+                  )}
 
                   {/* Grounding Facts Expander (for Assistant messages) */}
                   {!isUser && msg.groundingFacts && msg.groundingFacts.length > 0 && (

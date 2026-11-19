@@ -162,4 +162,38 @@ describe('POST /api/assistant Route Handler & Vercel Config', () => {
     expect(body.reply).toBeDefined();
     expect(body.groundingFacts).toBeDefined();
   });
+
+  it('activates local fallback with source local_engine when Gemini returns null due to incomplete response (e.g. MAX_TOKENS)', async () => {
+    // Simulate callGeminiAssistant returning null due to truncated/incomplete answer
+    (callGeminiAssistant as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    const req = new NextRequest('http://localhost:3000/api/assistant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'Give me 3 actions to protect my baby from smog',
+        environmentalContext: {
+          city: 'Delhi',
+          country: 'India',
+          currentPm25: 250,
+        },
+        topActions: [
+          {
+            title: 'Restrict Strenuous Exertion',
+            category: 'protect_household',
+            whatToDo: 'Keep children indoors during inversion peaks.',
+          },
+        ],
+      }),
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.source).toBe('local_engine');
+    expect(body.reply).toBeDefined();
+    expect(body.reply.length).toBeGreaterThan(20);
+    expect(body.disclaimer).toContain('AeroWise Air-to-Action Engine (Local Fallback)');
+  });
 });
