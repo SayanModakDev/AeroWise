@@ -4,6 +4,9 @@ import { callGeminiAssistant } from '@/lib/assistant/gemini';
 import { generateLocalFallbackResponse } from '@/lib/assistant/fallback';
 import { AssistantApiResponse } from '@/types/assistant';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 // Schema validation
 const requestSchema = z.object({
   message: z.string().trim().min(1, 'Message cannot be empty').max(600, 'Message too long'),
