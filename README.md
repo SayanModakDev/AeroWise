@@ -178,6 +178,7 @@ The **Air-to-Action Decision Engine** (`src/lib/decision-engine/`) is an isolate
    ```env
    GEMINI_API_KEY=your_google_ai_studio_api_key_here
    GEMINI_MODEL=gemini-3.8-flash
+   GEMINI_TIMEOUT_MS=20000
    ```
 4. Start the development server:
    ```bash
@@ -197,6 +198,10 @@ GEMINI_API_KEY=
 # Google Gemini Model
 # Defaults to gemini-3.8-flash if unset
 GEMINI_MODEL=gemini-3.8-flash
+
+# Google Gemini Request Timeout in milliseconds
+# Defaults to 20000 (20s timeout, well within Vercel's 30s maxDuration limit)
+GEMINI_TIMEOUT_MS=20000
 ```
 
 ---

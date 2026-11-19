@@ -5,6 +5,7 @@ import {
 } from '@/types/assistant';
 
 const DEFAULT_MODEL = 'gemini-3.8-flash';
+export const DEFAULT_TIMEOUT_MS = 20000;
 
 export async function callGeminiAssistant(params: {
   message: string;
@@ -22,10 +23,23 @@ export async function callGeminiAssistant(params: {
 
   const modelName = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 
+  const parsedTimeout = process.env.GEMINI_TIMEOUT_MS
+    ? parseInt(process.env.GEMINI_TIMEOUT_MS, 10)
+    : NaN;
+  const timeoutMs =
+    !isNaN(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : DEFAULT_TIMEOUT_MS;
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  let isLocalTimeout = false;
+  let timeoutId: NodeJS.Timeout | null = null;
+  const startTime = Date.now();
 
   try {
+    timeoutId = setTimeout(() => {
+      isLocalTimeout = true;
+      controller.abort();
+    }, timeoutMs);
+
     const ai = new GoogleGenAI({ apiKey });
 
     const groundingFacts = [
@@ -86,10 +100,13 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       },
     });
 
-    clearTimeout(timeoutId);
-
+    const elapsedMs = Date.now() - startTime;
     const replyText = response.text;
+
     if (!replyText || replyText.trim() === '') {
+      console.warn(
+        `[Gemini Assistant] Empty or blank response received from model '${modelName}' after ${elapsedMs}ms. Falling back to local decision engine.`
+      );
       return null;
     }
 
@@ -97,9 +114,75 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       reply: replyText.trim(),
       groundingFacts,
     };
-  } catch (error) {
-    clearTimeout(timeoutId);
-    console.warn('Gemini API call encountered an error, falling back to local engine:', error);
+  } catch (error: unknown) {
+    const elapsedMs = Date.now() - startTime;
+    const errorObj = error as Record<string, unknown> | null | undefined;
+    const errorStatus =
+      typeof errorObj?.status === 'number'
+        ? errorObj.status
+        : typeof errorObj?.statusCode === 'number'
+        ? errorObj.statusCode
+        : undefined;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessageLower = errorMessage.toLowerCase();
+    const errorName = error instanceof Error ? error.name : '';
+
+    if (isLocalTimeout || (controller.signal.aborted && errorName === 'AbortError')) {
+      console.warn(
+        `[Gemini Assistant] Request timed out locally after ${elapsedMs}ms (timeout limit: ${timeoutMs}ms). Operation aborted. Falling back to local decision engine.`
+      );
+    } else if (
+      errorStatus === 401 ||
+      errorStatus === 403 ||
+      errorMessageLower.includes('api key') ||
+      errorMessageLower.includes('unauthorized') ||
+      errorMessageLower.includes('permission_denied') ||
+      errorMessageLower.includes('permission denied')
+    ) {
+      console.warn(
+        `[Gemini Assistant] Invalid API credentials or permission denied after ${elapsedMs}ms. Falling back to local decision engine.`
+      );
+    } else if (
+      errorStatus === 404 ||
+      errorMessageLower.includes('not found') ||
+      errorMessageLower.includes('is not supported') ||
+      errorMessageLower.includes('unsupported model')
+    ) {
+      console.warn(
+        `[Gemini Assistant] Model '${modelName}' unavailable or not found after ${elapsedMs}ms. Falling back to local decision engine.`
+      );
+    } else if (
+      errorStatus === 429 ||
+      errorMessageLower.includes('429') ||
+      errorMessageLower.includes('quota') ||
+      errorMessageLower.includes('resource_exhausted') ||
+      errorMessageLower.includes('resource has been exhausted')
+    ) {
+      console.warn(
+        `[Gemini Assistant] Rate limit or quota exhausted (429) after ${elapsedMs}ms. Falling back to local decision engine.`
+      );
+    } else if (
+      errorMessageLower.includes('fetch failed') ||
+      errorMessageLower.includes('enotfound') ||
+      errorMessageLower.includes('econnrefused') ||
+      errorMessageLower.includes('econnreset') ||
+      errorMessageLower.includes('network') ||
+      errorMessageLower.includes('socket')
+    ) {
+      console.warn(
+        `[Gemini Assistant] Network connectivity error after ${elapsedMs}ms: ${errorMessage}. Falling back to local decision engine.`
+      );
+    } else {
+      console.warn(
+        `[Gemini Assistant] Upstream Gemini error after ${elapsedMs}ms: ${errorMessage}. Falling back to local decision engine.`
+      );
+    }
+
     return null;
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
   }
 }

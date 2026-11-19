@@ -6,6 +6,7 @@ import { AssistantApiResponse } from '@/types/assistant';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+export const maxDuration = 30;
 
 // Schema validation
 const requestSchema = z.object({

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { POST } from '@/app/api/assistant/route';
+import { POST, maxDuration, dynamic, runtime } from '@/app/api/assistant/route';
 import { NextRequest } from 'next/server';
 
 // Mock callGeminiAssistant directly to test the route behavior
@@ -9,9 +9,15 @@ vi.mock('@/lib/assistant/gemini', () => ({
 
 import { callGeminiAssistant } from '@/lib/assistant/gemini';
 
-describe('POST /api/assistant Route Handler', () => {
+describe('POST /api/assistant Route Handler & Vercel Config', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('exports Vercel function runtime configurations: maxDuration=30, dynamic=force-dynamic, runtime=nodejs', () => {
+    expect(maxDuration).toBe(30);
+    expect(dynamic).toBe('force-dynamic');
+    expect(runtime).toBe('nodejs');
   });
 
   it('rejects empty message with status 400', async () => {
@@ -90,7 +96,7 @@ describe('POST /api/assistant Route Handler', () => {
   });
 
   it('activates deterministic local engine fallback when Gemini call returns null', async () => {
-    // Simulate Gemini unavailable (returns null)
+    // Simulate Gemini unavailable / timed out (returns null)
     (callGeminiAssistant as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
 
     const req = new NextRequest('http://localhost:3000/api/assistant', {
@@ -123,5 +129,37 @@ describe('POST /api/assistant Route Handler', () => {
     expect(body.source).toBe('local_engine');
     expect(body.reply).toContain('New Delhi');
     expect(body.disclaimer).toContain('AeroWise Air-to-Action Engine (Local Fallback)');
+  });
+
+  it('ensures fallback response is correctly labelled local_engine on authentication or timeout failures', async () => {
+    // Simulate Gemini failure due to invalid credentials or timeout
+    (callGeminiAssistant as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    const req = new NextRequest('http://localhost:3000/api/assistant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'How do I clean indoor air without a purifier?',
+        environmentalContext: {
+          city: 'Patna',
+          country: 'India',
+          currentPm25: 220,
+          currentPm10: 310,
+          trendDirection: 'stable',
+        },
+        topActions: [],
+      }),
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.source).toBe('local_engine');
+    expect(body.disclaimer).toContain(
+      'AeroWise Air-to-Action Engine (Local Fallback)'
+    );
+    expect(body.reply).toBeDefined();
+    expect(body.groundingFacts).toBeDefined();
   });
 });
