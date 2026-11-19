@@ -1,8 +1,8 @@
 'use client';
 
 import React from 'react';
+import Image from 'next/image';
 import {
-  Wind,
   MapPin,
   RefreshCw,
   Home,
@@ -117,8 +117,16 @@ export function Navbar({
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-sm">
-              <Wind className="w-5 h-5 stroke-[2.2]" />
+            <div className="w-10 h-10 rounded-xl overflow-hidden shadow-xs shrink-0 bg-sky-50 border border-teal-100 flex items-center justify-center">
+              <Image
+                src="/aerowise-icon.svg"
+                alt="AeroWise Logo"
+                width={40}
+                height={40}
+                className="w-full h-full object-cover"
+                priority
+                unoptimized
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">

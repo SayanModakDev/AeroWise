@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import Image from 'next/image';
 import {
   GeoLocation,
   ModelledAirQuality,
@@ -235,6 +236,16 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-md overflow-hidden shrink-0 border border-teal-100 flex items-center justify-center">
+                  <Image
+                    src="/aerowise-icon.svg"
+                    alt="AeroWise"
+                    width={20}
+                    height={20}
+                    className="w-full h-full object-cover"
+                    unoptimized
+                  />
+                </div>
                 <span className="font-bold text-slate-800 text-sm">
                   AeroWise
                 </span>
