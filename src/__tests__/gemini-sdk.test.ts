@@ -44,7 +44,7 @@ const mockTopActions = [
   },
 ];
 
-describe('@google/genai SDK Integration, Latency Optimization & Fallback', () => {
+describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Fallback', () => {
   const originalEnv = { ...process.env };
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -75,13 +75,13 @@ describe('@google/genai SDK Integration, Latency Optimization & Fallback', () =>
     expect(genAiModule.GoogleGenAI).not.toHaveBeenCalled();
   });
 
-  it('response completed before 20 seconds returns Gemini output with LOW thinking and maxOutputTokens 400', async () => {
+  it('selects default model gemini-3.5-flash-lite when GEMINI_MODEL is missing', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
-    delete process.env.GEMINI_MODEL; // Default to gemini-3.8-flash
+    delete process.env.GEMINI_MODEL; // Default must be gemini-3.5-flash-lite
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
     mockGen.mockResolvedValueOnce({
-      text: 'Based on current conditions in New Delhi, postpone outdoor workouts until afternoon.',
+      text: 'Response from default gemini-3.5-flash-lite model.',
     });
 
     const result = await callGeminiAssistant({
@@ -91,25 +91,19 @@ describe('@google/genai SDK Integration, Latency Optimization & Fallback', () =>
     });
 
     expect(result).not.toBeNull();
-    expect(result?.reply).toContain('New Delhi');
-    expect(result?.groundingFacts.length).toBeGreaterThan(0);
+    expect(result?.reply).toContain('gemini-3.5-flash-lite');
 
-    // Verify generateContent configuration
+    // Verify generateContent was called with gemini-3.5-flash-lite
     expect(mockGen).toHaveBeenCalledTimes(1);
     const callArgs = mockGen.mock.calls[0][0];
-    expect(callArgs.model).toBe('gemini-3.8-flash');
-    // Temperature must be omitted for gemini-3.8-flash
-    expect(callArgs.config.temperature).toBeUndefined();
-    // ThinkingConfig must be set to LOW
+    expect(callArgs.model).toBe('gemini-3.5-flash-lite');
     expect(callArgs.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
-    // Max output tokens reduced from 600 to 400
     expect(callArgs.config.maxOutputTokens).toBe(400);
-    // AbortSignal preserved
     expect(callArgs.config.abortSignal).toBeDefined();
     expect(callArgs.config.systemInstruction).toContain('AeroWise Assistant');
   });
 
-  it('uses custom GEMINI_MODEL when configured in environment', async () => {
+  it('honors GEMINI_MODEL environment-variable override', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
     process.env.GEMINI_MODEL = 'gemini-2.5-pro';
 
@@ -130,12 +124,39 @@ describe('@google/genai SDK Integration, Latency Optimization & Fallback', () =>
     expect(callArgs.model).toBe('gemini-2.5-pro');
   });
 
+  it('successfully generates response from gemini-3.5-flash-lite with LOW thinking level', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+    process.env.GEMINI_MODEL = 'gemini-3.5-flash-lite';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    mockGen.mockResolvedValueOnce({
+      text: 'Based on current conditions in New Delhi, postpone outdoor workouts until afternoon.',
+    });
+
+    const result = await callGeminiAssistant({
+      message: 'Can I exercise outdoors today?',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.reply).toContain('New Delhi');
+    expect(result?.groundingFacts.length).toBeGreaterThan(0);
+
+    expect(mockGen).toHaveBeenCalledTimes(1);
+    const callArgs = mockGen.mock.calls[0][0];
+    expect(callArgs.model).toBe('gemini-3.5-flash-lite');
+    expect(callArgs.config.temperature).toBeUndefined();
+    expect(callArgs.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
+    expect(callArgs.config.maxOutputTokens).toBe(400);
+    expect(callArgs.config.abortSignal).toBeDefined();
+  });
+
   it('triggers fallback and returns null when request exceeds 20 seconds timeout', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
     vi.useFakeTimers();
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
-    // Simulate long-running request that aborts when abortSignal fires
     mockGen.mockImplementationOnce(({ config }: { config: { abortSignal?: AbortSignal } }) => {
       return new Promise((resolve, reject) => {
         if (config?.abortSignal) {
@@ -154,7 +175,6 @@ describe('@google/genai SDK Integration, Latency Optimization & Fallback', () =>
       topActions: mockTopActions,
     });
 
-    // Advance fake timers by 20005 ms to trigger the 20s timeout
     await vi.advanceTimersByTimeAsync(20005);
 
     const result = await promise;
@@ -202,7 +222,7 @@ describe('@google/genai SDK Integration, Latency Optimization & Fallback', () =>
     process.env.GEMINI_API_KEY = 'test-key-valid';
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
-    const err = new Error('400 Invalid argument: thinking_config not supported');
+    const err = new Error('400 Invalid argument: unsupported parameter');
     (err as unknown as { status: number }).status = 400;
     mockGen.mockRejectedValueOnce(err);
 
@@ -238,7 +258,7 @@ describe('@google/genai SDK Integration, Latency Optimization & Fallback', () =>
     );
   });
 
-  it('handles model unavailable error (404) separately and falls back', async () => {
+  it('handles model unavailable error (404) separately and falls back to local engine', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
@@ -254,7 +274,7 @@ describe('@google/genai SDK Integration, Latency Optimization & Fallback', () =>
 
     expect(result).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('unavailable or not found')
+      expect.stringContaining('unavailable or not found (status 404)')
     );
   });
 
@@ -360,7 +380,6 @@ describe('@google/genai SDK Integration, Latency Optimization & Fallback', () =>
       topActions: mockTopActions,
     });
 
-    // Advance past 12000ms
     await vi.advanceTimersByTimeAsync(12005);
 
     const result = await promise;

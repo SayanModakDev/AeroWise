@@ -4,7 +4,7 @@ import {
   AssistantEnvironmentalContext,
 } from '@/types/assistant';
 
-const DEFAULT_MODEL = 'gemini-3.8-flash';
+const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_TIMEOUT_MS = 20000;
 
 export async function callGeminiAssistant(params: {
@@ -21,7 +21,7 @@ export async function callGeminiAssistant(params: {
     return null;
   }
 
-  const modelName = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
+  const modelName = process.env.GEMINI_MODEL || DEFAULT_MODEL;
 
   const parsedTimeout = process.env.GEMINI_TIMEOUT_MS
     ? parseInt(process.env.GEMINI_TIMEOUT_MS, 10)
