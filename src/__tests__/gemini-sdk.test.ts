@@ -48,7 +48,7 @@ const mockTopActions = [
   },
 ];
 
-describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Response Completeness', () => {
+describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & MINIMAL Thinking', () => {
   const originalEnv = { ...process.env };
   let warnSpy: ReturnType<typeof vi.spyOn>;
   let infoSpy: ReturnType<typeof vi.spyOn>;
@@ -64,9 +64,9 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Response Comple
     vi.useRealTimers();
   });
 
-  it('verifies default timeout constant is set to 20000ms and maxOutputTokens is 800', () => {
+  it('verifies default timeout constant is set to 20000ms and maxOutputTokens is 1024', () => {
     expect(DEFAULT_TIMEOUT_MS).toBe(20000);
-    expect(DEFAULT_MAX_OUTPUT_TOKENS).toBe(800);
+    expect(DEFAULT_MAX_OUTPUT_TOKENS).toBe(1024);
   });
 
   it('returns null and does not instantiate SDK if GEMINI_API_KEY is not set', async () => {
@@ -82,15 +82,22 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Response Comple
     expect(genAiModule.GoogleGenAI).not.toHaveBeenCalled();
   });
 
-  it('selects default model gemini-3.5-flash-lite when GEMINI_MODEL is missing', async () => {
+  it('selects default model gemini-3.5-flash-lite with MINIMAL thinking level and 1024 output tokens', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
     delete process.env.GEMINI_MODEL; // Default must be gemini-3.5-flash-lite
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
     mockGen.mockResolvedValueOnce({
       text: 'Response from default gemini-3.5-flash-lite model.',
+      modelVersion: 'gemini-3.5-flash-lite-001',
       candidates: [{ finishReason: 'STOP' }],
-      usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 30, totalTokenCount: 150 },
+      usageMetadata: {
+        promptTokenCount: 762,
+        candidatesTokenCount: 45,
+        thoughtsTokenCount: 12,
+        toolUsePromptTokenCount: 0,
+        totalTokenCount: 819,
+      },
     });
 
     const result = await callGeminiAssistant({
@@ -102,18 +109,23 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Response Comple
     expect(result).not.toBeNull();
     expect(result?.reply).toContain('gemini-3.5-flash-lite');
 
-    // Verify generateContent was called with gemini-3.5-flash-lite
+    // Verify generateContent configuration
     expect(mockGen).toHaveBeenCalledTimes(1);
     const callArgs = mockGen.mock.calls[0][0];
     expect(callArgs.model).toBe('gemini-3.5-flash-lite');
-    expect(callArgs.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
-    expect(callArgs.config.maxOutputTokens).toBe(800);
+    // ThinkingConfig must be set to MINIMAL to prevent excessive reasoning tokens
+    expect(callArgs.config.thinkingConfig).toEqual({ thinkingLevel: 'MINIMAL' });
+    // Max output tokens configured to 1024
+    expect(callArgs.config.maxOutputTokens).toBe(1024);
     expect(callArgs.config.abortSignal).toBeDefined();
     expect(callArgs.config.systemInstruction).toContain('AeroWise Assistant');
 
-    // Verify safe diagnostic logging was called
+    // Verify detailed safe diagnostic logging of individual token fields
     expect(infoSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Diagnostic - Model: gemini-3.5-flash-lite, FinishReason: STOP')
+      expect.stringContaining('PromptTokens: 762, CandidateTokens: 45, ThoughtsTokens: 12, ToolUsePromptTokens: 0, TotalTokens: 819')
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('ModelVersion: gemini-3.5-flash-lite-001')
     );
   });
 
@@ -139,14 +151,20 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Response Comple
     expect(callArgs.model).toBe('gemini-2.5-pro');
   });
 
-  it('complete Gemini response ending with STOP returns full content and grounding facts', async () => {
+  it('successfully generates complete three-recommendation answer ending with STOP', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
     mockGen.mockResolvedValueOnce({
-      text: 'With current modelled PM2.5 at 180 µg/m³, morning outdoor exercise poses high respiratory exposure.\n\n1. Move workout indoors today.\n2. Keep windows sealed during inversion peaks.\n3. Exercise after 13:00 if outdoors.\n\nThese steps reduce direct alveolar particulate deposition.',
+      text: 'With current modelled PM2.5 at 180 µg/m³, morning outdoor exercise poses high respiratory exposure.\n\n1. Move morning cardio indoors to eliminate deep alveolar dust inhalation.\n2. Keep residential windows sealed during morning inversion peaks.\n3. Shift any essential outdoor activities to the afternoon window (13:00–15:30).\n\nThese three interventions prioritize direct personal exposure reduction while atmospheric inversion is active.',
       candidates: [{ finishReason: 'STOP' }],
-      usageMetadata: { promptTokenCount: 160, candidatesTokenCount: 65, totalTokenCount: 225 },
+      usageMetadata: {
+        promptTokenCount: 760,
+        candidatesTokenCount: 88,
+        thoughtsTokenCount: 16,
+        toolUsePromptTokenCount: 0,
+        totalTokenCount: 864,
+      },
     });
 
     const result = await callGeminiAssistant({
@@ -156,21 +174,27 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Response Comple
     });
 
     expect(result).not.toBeNull();
-    expect(result?.reply).toContain('1. Move workout indoors today.');
-    expect(result?.reply).toContain('2. Keep windows sealed during inversion peaks.');
-    expect(result?.reply).toContain('3. Exercise after 13:00 if outdoors.');
+    expect(result?.reply).toContain('1. Move morning cardio indoors');
+    expect(result?.reply).toContain('2. Keep residential windows sealed');
+    expect(result?.reply).toContain('3. Shift any essential outdoor activities');
     expect(result?.groundingFacts.length).toBeGreaterThan(0);
   });
 
-  it('treats response ending with MAX_TOKENS as incomplete and returns null for local fallback', async () => {
+  it('treats response ending with MAX_TOKENS (e.g. excessive thinking) as incomplete and returns null for local fallback', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
-    // Simulate generation truncated mid-sentence by token budget
+    // Simulate real production log scenario: 764 thoughts tokens + 32 candidate tokens = 1558 total tokens (hitting ceiling)
     mockGen.mockResolvedValueOnce({
       text: "You don't need an expensive air purifier to protect your family indoors. With",
       candidates: [{ finishReason: 'MAX_TOKENS' }],
-      usageMetadata: { promptTokenCount: 180, candidatesTokenCount: 400, totalTokenCount: 580 },
+      usageMetadata: {
+        promptTokenCount: 762,
+        candidatesTokenCount: 32,
+        thoughtsTokenCount: 764,
+        toolUsePromptTokenCount: 0,
+        totalTokenCount: 1558,
+      },
     });
 
     const result = await callGeminiAssistant({
@@ -181,7 +205,7 @@ describe('@google/genai SDK Integration, Gemini 3.5 Flash-Lite & Response Comple
 
     expect(result).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Incomplete response truncated by MAX_TOKENS ceiling')
+      expect.stringContaining('Incomplete response truncated by MAX_TOKENS ceiling (CandidateTokens: 32, ThoughtsTokens: 764, TotalTokens: 1558')
     );
   });
 

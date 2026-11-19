@@ -6,7 +6,7 @@ import {
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_TIMEOUT_MS = 20000;
-export const DEFAULT_MAX_OUTPUT_TOKENS = 800;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 1024;
 
 export async function callGeminiAssistant(params: {
   message: string;
@@ -104,7 +104,7 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       config: {
         systemInstruction,
         thinkingConfig: {
-          thinkingLevel: ThinkingLevel.LOW,
+          thinkingLevel: ThinkingLevel.MINIMAL,
         },
         maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
         abortSignal: controller.signal,
@@ -118,16 +118,19 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
     const primaryCandidate = candidates && candidates.length > 0 ? candidates[0] : undefined;
     const finishReason = primaryCandidate?.finishReason;
     const finishMessage = (primaryCandidate as { finishMessage?: string })?.finishMessage;
+    const modelVersion = response.modelVersion || modelName;
     const usage = response.usageMetadata;
-    const promptTokens = usage?.promptTokenCount ?? 0;
-    const candidateTokens = usage?.candidatesTokenCount ?? 0;
-    const totalTokens = usage?.totalTokenCount ?? 0;
+    const promptTokenCount = usage?.promptTokenCount ?? 0;
+    const candidatesTokenCount = usage?.candidatesTokenCount ?? 0;
+    const thoughtsTokenCount = usage?.thoughtsTokenCount ?? 0;
+    const toolUsePromptTokenCount = usage?.toolUsePromptTokenCount ?? 0;
+    const totalTokenCount = usage?.totalTokenCount ?? 0;
     const replyText = response.text;
     const charLength = replyText ? replyText.length : 0;
 
     // Safe diagnostic logging (no API keys, prompts, household PII, or raw personal data)
     console.info(
-      `[Gemini Assistant] Diagnostic - Model: ${modelName}, FinishReason: ${finishReason || 'UNKNOWN'}, PromptTokens: ${promptTokens}, CandidateTokens: ${candidateTokens}, TotalTokens: ${totalTokens}, CharLength: ${charLength}, Duration: ${elapsedMs}ms`
+      `[Gemini Assistant] Diagnostic - Model: ${modelName}, ModelVersion: ${modelVersion}, FinishReason: ${finishReason || 'UNKNOWN'}, PromptTokens: ${promptTokenCount}, CandidateTokens: ${candidatesTokenCount}, ThoughtsTokens: ${thoughtsTokenCount}, ToolUsePromptTokens: ${toolUsePromptTokenCount}, TotalTokens: ${totalTokenCount}, CharLength: ${charLength}, Duration: ${elapsedMs}ms`
     );
 
     // Validate candidate presence
@@ -141,7 +144,7 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
     // Treat responses ending with MAX_TOKENS as incomplete
     if (finishReason === 'MAX_TOKENS') {
       console.warn(
-        `[Gemini Assistant] Incomplete response truncated by MAX_TOKENS ceiling (CandidateTokens: ${candidateTokens}, CharLength: ${charLength}, Duration: ${elapsedMs}ms). Discarding incomplete output and falling back to local decision engine.`
+        `[Gemini Assistant] Incomplete response truncated by MAX_TOKENS ceiling (CandidateTokens: ${candidatesTokenCount}, ThoughtsTokens: ${thoughtsTokenCount}, TotalTokens: ${totalTokenCount}, CharLength: ${charLength}, Duration: ${elapsedMs}ms). Discarding incomplete output and falling back to local decision engine.`
       );
       return null;
     }
