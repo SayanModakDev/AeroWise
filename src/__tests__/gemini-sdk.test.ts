@@ -12,6 +12,14 @@ vi.mock('@google/genai', () => {
         generateContent: mockGenerateContent,
       },
     })),
+    ThinkingLevel: {
+      THINKING_LEVEL_UNSPECIFIED: 'THINKING_LEVEL_UNSPECIFIED',
+      MINIMAL: 'MINIMAL',
+      LOW: 'LOW',
+      MEDIUM: 'MEDIUM',
+      HIGH: 'HIGH',
+      XHIGH: 'XHIGH',
+    },
     __mockGenerateContent: mockGenerateContent,
   };
 });
@@ -36,7 +44,7 @@ const mockTopActions = [
   },
 ];
 
-describe('@google/genai SDK Integration, Timeout & Fallback', () => {
+describe('@google/genai SDK Integration, Latency Optimization & Fallback', () => {
   const originalEnv = { ...process.env };
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -67,7 +75,7 @@ describe('@google/genai SDK Integration, Timeout & Fallback', () => {
     expect(genAiModule.GoogleGenAI).not.toHaveBeenCalled();
   });
 
-  it('response completed before 20 seconds returns Gemini output and grounded facts', async () => {
+  it('response completed before 20 seconds returns Gemini output with LOW thinking and maxOutputTokens 400', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
     delete process.env.GEMINI_MODEL; // Default to gemini-3.8-flash
 
@@ -86,11 +94,17 @@ describe('@google/genai SDK Integration, Timeout & Fallback', () => {
     expect(result?.reply).toContain('New Delhi');
     expect(result?.groundingFacts.length).toBeGreaterThan(0);
 
-    // Verify generateContent was called with gemini-3.8-flash and abortSignal attached
+    // Verify generateContent configuration
     expect(mockGen).toHaveBeenCalledTimes(1);
     const callArgs = mockGen.mock.calls[0][0];
     expect(callArgs.model).toBe('gemini-3.8-flash');
-    expect(callArgs.config.temperature).toBe(0.3);
+    // Temperature must be omitted for gemini-3.8-flash
+    expect(callArgs.config.temperature).toBeUndefined();
+    // ThinkingConfig must be set to LOW
+    expect(callArgs.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
+    // Max output tokens reduced from 600 to 400
+    expect(callArgs.config.maxOutputTokens).toBe(400);
+    // AbortSignal preserved
     expect(callArgs.config.abortSignal).toBeDefined();
     expect(callArgs.config.systemInstruction).toContain('AeroWise Assistant');
   });
@@ -146,7 +160,7 @@ describe('@google/genai SDK Integration, Timeout & Fallback', () => {
     const result = await promise;
     expect(result).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Request timed out locally')
+      expect.stringContaining('Request timed out locally after')
     );
   });
 
@@ -184,7 +198,27 @@ describe('@google/genai SDK Integration, Timeout & Fallback', () => {
     expect(clearTimeoutSpy).toHaveBeenCalled();
   });
 
-  it('handles invalid credentials separately and falls back to local engine', async () => {
+  it('handles 400 bad request / unsupported parameter separately and falls back', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    const err = new Error('400 Invalid argument: thinking_config not supported');
+    (err as unknown as { status: number }).status = 400;
+    mockGen.mockRejectedValueOnce(err);
+
+    const result = await callGeminiAssistant({
+      message: 'Checking 400 error',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Bad request or unsupported parameter (status 400)')
+    );
+  });
+
+  it('handles invalid credentials (401/403) separately and falls back to local engine', async () => {
     process.env.GEMINI_API_KEY = 'invalid-api-key';
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
@@ -200,11 +234,11 @@ describe('@google/genai SDK Integration, Timeout & Fallback', () => {
 
     expect(result).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Invalid API credentials or permission denied')
+      expect.stringContaining('Authentication or permission issue')
     );
   });
 
-  it('handles model unavailable error separately and falls back', async () => {
+  it('handles model unavailable error (404) separately and falls back', async () => {
     process.env.GEMINI_API_KEY = 'test-key-valid';
 
     const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
@@ -240,7 +274,27 @@ describe('@google/genai SDK Integration, Timeout & Fallback', () => {
 
     expect(result).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Rate limit or quota exhausted (429)')
+      expect.stringContaining('Rate limit or quota exhausted (status 429)')
+    );
+  });
+
+  it('handles 503 service unavailable / model temporarily overloaded separately and falls back', async () => {
+    process.env.GEMINI_API_KEY = 'test-key-valid';
+
+    const mockGen = (genAiModule as unknown as { __mockGenerateContent: ReturnType<typeof vi.fn> }).__mockGenerateContent;
+    const overloadError = new Error('The model is overloaded. Please try again later.');
+    (overloadError as unknown as { status: number }).status = 503;
+    mockGen.mockRejectedValueOnce(overloadError);
+
+    const result = await callGeminiAssistant({
+      message: 'Model overloaded query',
+      environmentalContext: mockEnv,
+      topActions: mockTopActions,
+    });
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Service unavailable or model temporarily overloaded (status 503)')
     );
   });
 

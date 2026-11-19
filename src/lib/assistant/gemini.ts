@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
   AssistantActionSummary,
   AssistantEnvironmentalContext,
@@ -94,8 +94,10 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       contents,
       config: {
         systemInstruction,
-        temperature: 0.3,
-        maxOutputTokens: 600,
+        thinkingConfig: {
+          thinkingLevel: ThinkingLevel.LOW,
+        },
+        maxOutputTokens: 400,
         abortSignal: controller.signal,
       },
     });
@@ -132,6 +134,16 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
         `[Gemini Assistant] Request timed out locally after ${elapsedMs}ms (timeout limit: ${timeoutMs}ms). Operation aborted. Falling back to local decision engine.`
       );
     } else if (
+      errorStatus === 400 ||
+      errorMessageLower.includes('400') ||
+      errorMessageLower.includes('invalid argument') ||
+      errorMessageLower.includes('unsupported parameter') ||
+      errorMessageLower.includes('bad request')
+    ) {
+      console.warn(
+        `[Gemini Assistant] Bad request or unsupported parameter (status 400) after ${elapsedMs}ms: ${errorMessage}. Falling back to local decision engine.`
+      );
+    } else if (
       errorStatus === 401 ||
       errorStatus === 403 ||
       errorMessageLower.includes('api key') ||
@@ -140,7 +152,7 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       errorMessageLower.includes('permission denied')
     ) {
       console.warn(
-        `[Gemini Assistant] Invalid API credentials or permission denied after ${elapsedMs}ms. Falling back to local decision engine.`
+        `[Gemini Assistant] Authentication or permission issue (status ${errorStatus ?? '401/403'}) after ${elapsedMs}ms: API key invalid or unauthorized. Falling back to local decision engine.`
       );
     } else if (
       errorStatus === 404 ||
@@ -149,7 +161,7 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       errorMessageLower.includes('unsupported model')
     ) {
       console.warn(
-        `[Gemini Assistant] Model '${modelName}' unavailable or not found after ${elapsedMs}ms. Falling back to local decision engine.`
+        `[Gemini Assistant] Model '${modelName}' unavailable or not found (status 404) after ${elapsedMs}ms. Falling back to local decision engine.`
       );
     } else if (
       errorStatus === 429 ||
@@ -159,7 +171,16 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       errorMessageLower.includes('resource has been exhausted')
     ) {
       console.warn(
-        `[Gemini Assistant] Rate limit or quota exhausted (429) after ${elapsedMs}ms. Falling back to local decision engine.`
+        `[Gemini Assistant] Rate limit or quota exhausted (status 429) after ${elapsedMs}ms. Falling back to local decision engine.`
+      );
+    } else if (
+      errorStatus === 503 ||
+      errorMessageLower.includes('503') ||
+      errorMessageLower.includes('overloaded') ||
+      errorMessageLower.includes('service unavailable')
+    ) {
+      console.warn(
+        `[Gemini Assistant] Service unavailable or model temporarily overloaded (status 503) after ${elapsedMs}ms. Falling back to local decision engine.`
       );
     } else if (
       errorMessageLower.includes('fetch failed') ||
@@ -174,7 +195,7 @@ ${params.topActions.map((a, i) => `     ${i + 1}. [${a.category}] ${a.title}: ${
       );
     } else {
       console.warn(
-        `[Gemini Assistant] Upstream Gemini error after ${elapsedMs}ms: ${errorMessage}. Falling back to local decision engine.`
+        `[Gemini Assistant] Upstream Gemini error${errorStatus ? ` (status ${errorStatus})` : ''} after ${elapsedMs}ms: ${errorMessage}. Falling back to local decision engine.`
       );
     }
 
